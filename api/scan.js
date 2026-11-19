@@ -3,15 +3,13 @@ const https = require("https");
 const dns = require("dns").promises;
 const net = require("net");
 
-function publicIP(ip) {
+function isPublicIP(ip) {
   if (net.isIP(ip) !== 4) return false;
 
-  const p = ip.split(".").map(Number);
-  const a = p[0], b = p[1], c = p[2];
+  const [a, b, c] = ip.split(".").map(Number);
 
   return !(
-    a === 0 || a === 10 || a === 127 ||
-    a >= 224 ||
+    a === 0 || a === 10 || a === 127 || a >= 224 ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
@@ -23,34 +21,40 @@ function publicIP(ip) {
   );
 }
 
-async function validate(target) {
-  const url = new URL(target);
+async function validateURL(target) {
+  let url;
+
+  try {
+    url = new URL(target);
+  } catch {
+    throw new Error("Invalid website URL.");
+  }
 
   if (
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
     (url.port && url.port !== "443") ||
+    net.isIP(url.hostname) ||
     !url.hostname.includes(".") ||
     url.hostname.endsWith(".local")
   ) {
-    throw new Error("Invalid public HTTPS URL.");
-  }
-
-  if (net.isIP(url.hostname)) {
-    throw new Error("IP addresses are not accepted.");
+    throw new Error("Only public HTTPS websites are allowed.");
   }
 
   const addresses = await dns.resolve4(url.hostname);
 
-  if (!addresses.length || addresses.some(ip => !publicIP(ip))) {
-    throw new Error("Non-public address blocked.");
+  if (!addresses.length || addresses.some(ip => !isPublicIP(ip))) {
+    throw new Error("Website IP address is not allowed.");
   }
 
-  return { url, ip: addresses[0] };
+  return {
+    url,
+    ip: addresses[0]
+  };
 }
 
-function requestPage(url, ip) {
+function requestWebsite(url, ip) {
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname: url.hostname,
@@ -58,12 +62,33 @@ function requestPage(url, ip) {
       port: 443,
       path: url.pathname + url.search,
       method: "GET",
+      family: 4,
       lookup: (hostname, options, callback) => {
-        callback(null, ip, 4);
+        if (typeof options === "function") {
+          callback = options;
+          options = {};
+        }
+
+        if (typeof callback !== "function") {
+          return;
+        }
+
+        if (!isPublicIP(ip)) {
+          return callback(new Error("Invalid IP address."));
+        }
+
+        if (options && options.all) {
+          callback(null, [{
+            address: ip,
+            family: 4
+          }]);
+        } else {
+          callback(null, ip, 4);
+        }
       },
       headers: {
         "User-Agent": "ZORA-Security-Scanner/1.0",
-        "Accept": "text/html"
+        "Accept": "text/html,application/xhtml+xml"
       },
       timeout: 10000,
       maxHeaderSize: 16384
@@ -74,7 +99,7 @@ function requestPage(url, ip) {
         size += chunk.length;
 
         if (size > 65536) {
-          req.destroy(new Error("Response too large"));
+          req.destroy(new Error("Response too large."));
         }
       });
 
@@ -86,9 +111,9 @@ function requestPage(url, ip) {
       });
     });
 
-    req.on("timeout", () =>
-      req.destroy(new Error("Request timeout"))
-    );
+    req.on("timeout", () => {
+      req.destroy(new Error("Request timeout."));
+    });
 
     req.on("error", reject);
     req.end();
@@ -96,28 +121,30 @@ function requestPage(url, ip) {
 }
 
 async function performScan(target, redirects = 0) {
-  const { url, ip } = await validate(target);
-  const result = await requestPage(url, ip);
+  const { url, ip } = await validateURL(target);
+
+  const result = await requestWebsite(url, ip);
 
   const redirectCodes = [301, 302, 303, 307, 308];
 
-  if (redirectCodes.includes(result.status) &&
-      result.headers.location) {
-
+  if (
+    redirectCodes.includes(result.status) &&
+    result.headers.location
+  ) {
     if (redirects >= 4) {
-      throw new Error("Too many redirects.");
+      throw new Error("Maximum redirects exceeded.");
     }
 
-    const next = new URL(
+    const nextURL = new URL(
       result.headers.location,
       url
     ).toString();
 
-    return performScan(next, redirects + 1);
+    return performScan(nextURL, redirects + 1);
   }
 
   return {
-    url: url.origin,
+    target: url.origin,
     status: result.status,
     headers: result.headers
   };
@@ -129,42 +156,45 @@ module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({
       success: false,
-      error: "Method not allowed"
+      error: "Method not allowed."
     });
   }
 
   try {
-    const target = req.body && req.body.url;
+    const target = req.body?.url;
 
-    if (typeof target !== "string" || target.length > 2048) {
+    if (
+      typeof target !== "string" ||
+      target.length > 2048
+    ) {
       return res.status(400).json({
         success: false,
-        error: "Invalid URL"
+        error: "Invalid URL."
       });
     }
 
-    const data = await performScan(target);
-    const h = data.headers;
+    const result = await performScan(target);
+    const h = result.headers;
 
     const checks = [
       {
         name: "HTTPS Connection",
         pass: true,
-        detail: "HTTPS connection established"
+        detail: "HTTPS connection established."
       },
       {
         name: "Content Security Policy",
         pass: !!h["content-security-policy"],
         detail: h["content-security-policy"]
-          ? "CSP header detected"
-          : "CSP header missing"
+          ? "CSP header detected."
+          : "CSP header missing."
       },
       {
         name: "Strict Transport Security",
         pass: !!h["strict-transport-security"],
         detail: h["strict-transport-security"]
-          ? "HSTS header detected"
-          : "HSTS header missing"
+          ? "HSTS header detected."
+          : "HSTS header missing."
       },
       {
         name: "X-Frame-Options",
@@ -172,24 +202,24 @@ module.exports = async function handler(req, res) {
           /frame-ancestors/i.test(
             h["content-security-policy"] || ""
           ),
-        detail: "Frame protection check"
+        detail: "Frame protection check."
       },
       {
         name: "X-Content-Type-Options",
         pass: /nosniff/i.test(
           h["x-content-type-options"] || ""
         ),
-        detail: "MIME protection check"
+        detail: "MIME protection check."
       },
       {
         name: "Referrer Policy",
         pass: !!h["referrer-policy"],
-        detail: "Referrer policy check"
+        detail: "Referrer policy check."
       },
       {
         name: "Permissions Policy",
         pass: !!h["permissions-policy"],
-        detail: "Permissions policy check"
+        detail: "Permissions policy check."
       }
     ];
 
@@ -202,37 +232,43 @@ module.exports = async function handler(req, res) {
       sameSite: /;\s*samesite=/i.test(cookie)
     }));
 
-    const issues = cookies.reduce((total, c) =>
-      total +
-      (!c.secure ? 1 : 0) +
-      (!c.httpOnly ? 1 : 0) +
-      (!c.sameSite ? 1 : 0), 0
-    );
-
     const passed = checks.filter(c => c.pass).length;
 
-    const score = Math.max(0, Math.round(
-      passed / checks.length * 100 -
-      Math.min(issues * 3, 15)
-    ));
+    const cookieIssues = cookies.reduce(
+      (total, cookie) =>
+        total +
+        (!cookie.secure ? 1 : 0) +
+        (!cookie.httpOnly ? 1 : 0) +
+        (!cookie.sameSite ? 1 : 0),
+      0
+    );
+
+    const score = Math.max(
+      0,
+      Math.round(
+        (passed / checks.length) * 100 -
+        Math.min(cookieIssues * 3, 15)
+      )
+    );
 
     return res.status(200).json({
       success: true,
-      target: data.url,
-      status: data.status,
+      target: result.target,
+      status: result.status,
       score,
       checks,
       cookies,
       scannedAt: new Date().toISOString(),
-      disclaimer: "Passive configuration checks only."
+      disclaimer:
+        "Passive security configuration analysis only."
     });
 
   } catch (error) {
-    console.error("ZORA SCANNER:", error);
+    console.error("ZORA SCANNER ERROR:", error);
 
     return res.status(400).json({
       success: false,
-      error: error.message || "Scan failed"
+      error: error.message || "Scanner failed."
     });
   }
 };
