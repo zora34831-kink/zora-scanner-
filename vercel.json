@@ -1,0 +1,19 @@
+
+{
+  "version": 2,
+  "functions": {
+    "api/scan.js": {
+      "maxDuration": 15
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/scan",
+      "destination": "/api/scan"
+    },
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
+  ]
+}
