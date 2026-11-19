@@ -1,0 +1,453 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#090b10">
+<title>ZORA SECURITY SCANNER</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+
+:root {
+ --bg:#090b10;
+ --panel:#11151d;
+ --panel2:#161b25;
+ --line:#252c38;
+ --text:#edf1f8;
+ --muted:#818b9c;
+ --blue:#478cff;
+ --green:#36d69a;
+ --red:#ff6374;
+ --yellow:#eab85c;
+}
+*{box-sizing:border-box}
+body{
+ margin:0;background:var(--bg);color:var(--text);
+ font-family:'DM Sans',sans-serif;
+ min-height:100vh;
+}
+header{
+ height:72px;border-bottom:1px solid var(--line);
+ display:flex;align-items:center;justify-content:space-between;
+ padding:0 6%;background:#0b0e14;
+}
+.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:1px}
+.logo{
+ width:35px;height:35px;border-radius:10px;
+ background:linear-gradient(135deg,#478cff,#1d4f9c);
+ display:grid;place-items:center;font-weight:800;
+}
+.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px}
+.online{color:var(--green);font-size:11px;font-family:'DM Mono'}
+main{max-width:1150px;margin:auto;padding:48px 22px}
+.eyebrow{color:var(--blue);font-size:11px;letter-spacing:2px;font-weight:700}
+h1{font-size:clamp(28px,5vw,43px);margin:12px 0 8px;letter-spacing:-1.5px}
+.sub{color:var(--muted);font-size:14px;line-height:1.7}
+.scanner{
+ margin-top:32px;background:var(--panel);
+ border:1px solid var(--line);border-radius:16px;padding:24px;
+}
+.scanner label{font-size:12px;color:#aab4c4;display:block;margin-bottom:12px}
+.inputrow{display:flex;gap:10px}
+input{
+ flex:1;min-width:0;background:#090d14;border:1px solid #303949;
+ border-radius:9px;padding:15px;color:white;outline:none;
+ font:13px 'DM Mono';transition:.2s;
+}
+input:focus{border-color:var(--blue)}
+button{
+ border:0;border-radius:9px;padding:0 23px;
+ background:var(--blue);color:white;font-weight:700;
+ cursor:pointer;font-family:inherit;transition:.2s;
+}
+button:hover{filter:brightness(1.15);transform:translateY(-1px)}
+button:disabled{opacity:.5;cursor:wait;transform:none}
+.note{font-size:11px;color:var(--muted);margin-top:13px}
+.stats{
+ display:grid;grid-template-columns:repeat(3,1fr);
+ gap:13px;margin-top:22px;
+}
+.stat{
+ background:var(--panel);border:1px solid var(--line);
+ border-radius:12px;padding:19px;
+}
+.stat small{color:var(--muted);font-size:11px}
+.stat strong{display:block;font-size:25px;margin-top:8px}
+.sectionhead{
+ display:flex;justify-content:space-between;align-items:center;
+ margin:38px 0 16px;
+}
+.sectionhead h2{font-size:17px;margin:0}
+.panel{
+ background:var(--panel);border:1px solid var(--line);
+ border-radius:14px;padding:22px;
+}
+.result-top{display:flex;align-items:center;gap:30px;flex-wrap:wrap}
+.gauge{
+ width:130px;height:130px;border-radius:50%;
+ display:grid;place-items:center;position:relative;
+ background:conic-gradient(var(--blue) 0deg,#28303d 0deg);
+}
+.gauge:before{
+ content:"";position:absolute;inset:9px;
+ background:var(--panel);border-radius:50%;
+}
+.gauge div{z-index:1;text-align:center}
+.gauge strong{font-size:32px}
+.gauge small{display:block;color:var(--muted);font-size:10px}
+.result-info{flex:1;min-width:180px}
+.result-info h3{margin:0 0 8px;font-size:18px}
+.result-info p{color:var(--muted);font-size:12px;word-break:break-all}
+.result-info .status{color:var(--green);font-size:11px}
+.grid{
+ display:grid;grid-template-columns:1fr 1fr;
+ gap:12px;margin-top:20px;
+}
+.check{
+ display:flex;justify-content:space-between;align-items:center;
+ gap:10px;padding:15px;background:var(--panel2);
+ border:1px solid var(--line);border-radius:10px;
+}
+.check strong{font-size:12px}
+.check small{display:block;color:var(--muted);font-size:10px;margin-top:5px}
+.tag{font-size:10px;font-weight:700;white-space:nowrap}
+.pass{color:var(--green)}
+.fail{color:var(--red)}
+.history-item{
+ padding:14px 0;border-bottom:1px solid var(--line);
+ display:flex;justify-content:space-between;gap:12px;
+ font-size:12px;
+}
+.history-item:last-child{border:0}
+.history-item small{display:block;color:var(--muted);margin-top:5px}
+.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:20px}
+.secondary{
+ background:var(--panel2);border:1px solid var(--line);
+ padding:11px 16px;font-size:11px;
+}
+#results{display:none}
+#loading{display:none;margin-top:18px;color:var(--blue);font-size:12px}
+.loader{
+ display:inline-block;width:13px;height:13px;
+ border:2px solid #38465a;border-top-color:var(--blue);
+ border-radius:50%;animation:spin .7s linear infinite;
+ vertical-align:middle;margin-right:8px;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+footer{
+ text-align:center;border-top:1px solid var(--line);
+ padding:25px;color:var(--muted);font-size:10px;
+}
+@media(max-width:600px){
+ main{padding:35px 15px}
+ header{padding:0 17px}
+ .scanner{padding:17px}
+ .inputrow{flex-direction:column}
+ .inputrow button{height:48px}
+ .stats{gap:8px}
+ .stat{padding:13px}
+ .stat strong{font-size:20px}
+ .grid{grid-template-columns:1fr}
+ .result-top{gap:18px}
+}
+</style>
+</head>
+<body>
+
+<header>
+ <div class="brand">
+  <div class="logo">Z</div>
+  <div>ZORA <small>SECURITY SCANNER</small></div>
+ </div>
+ <div class="online">● SYSTEM READY</div>
+</header>
+
+<main>
+ <div class="eyebrow">SECURITY INTELLIGENCE / 01</div>
+ <h1>Website Security<br>Scanner.</h1>
+ <p class="sub">
+  Analyze website security configuration, HTTPS protection,
+  security headers and cookie policies.
+ </p>
+
+ <section class="scanner">
+  <label for="target">TARGET WEBSITE URL</label>
+  <div class="inputrow">
+   <input id="target" type="url"
+    placeholder="https://example.com">
+   <button id="scanBtn" onclick="startScan()">START SCAN →</button>
+  </div>
+  <div class="note">
+   Only scan websites you own or have permission to assess.
+   HTTPS addresses only.
+  </div>
+  <div id="loading">
+   <span class="loader"></span>
+   ANALYZING WEBSITE CONFIGURATION...
+  </div>
+ </section>
+
+ <div class="stats">
+  <div class="stat">
+   <small>TOTAL SCANS</small>
+   <strong id="total">0</strong>
+  </div>
+  <div class="stat">
+   <small>LAST SCORE</small>
+   <strong id="last">--</strong>
+  </div>
+  <div class="stat">
+   <small>SCAN ENGINE</small>
+   <strong style="font-size:17px">ACTIVE</strong>
+  </div>
+ </div>
+
+ <section id="results">
+  <div class="sectionhead">
+   <h2>Analysis Report</h2>
+   <span class="eyebrow">LIVE RESULT</span>
+  </div>
+
+  <div class="panel">
+   <div class="result-top">
+    <div class="gauge" id="gauge">
+     <div>
+      <strong id="score">0</strong>
+      <small>SECURITY SCORE</small>
+     </div>
+    </div>
+    <div class="result-info">
+     <h3 id="grade">Analysis Complete</h3>
+     <div class="status">● SCAN COMPLETED</div>
+     <p id="domain"></p>
+     <p id="httpStatus"></p>
+     <p id="scanDate"></p>
+    </div>
+   </div>
+
+   <div class="sectionhead">
+    <h2>Security Checks</h2>
+   </div>
+   <div class="grid" id="checks"></div>
+
+   <div class="sectionhead">
+    <h2>Cookie Analysis</h2>
+   </div>
+   <div id="cookies" class="grid"></div>
+
+   <div class="actions">
+    <button class="secondary" onclick="downloadReport()">
+     DOWNLOAD REPORT ↓
+    </button>
+    <button class="secondary" onclick="window.print()">
+     PRINT REPORT
+    </button>
+   </div>
+  </div>
+ </section>
+
+ <section>
+  <div class="sectionhead">
+   <h2>Scan History</h2>
+   <button class="secondary" onclick="clearHistory()">CLEAR</button>
+  </div>
+  <div class="panel" id="history">
+   <p class="sub">No scan history available.</p>
+  </div>
+ </section>
+
+ <p class="note" style="margin-top:25px">
+  Disclaimer: This scanner performs passive configuration checks.
+  It does not guarantee that a website is free from vulnerabilities.
+ </p>
+</main>
+
+<footer>
+ ZORA SECURITY SCANNER © 2026 · SECURITY ANALYSIS PLATFORM
+</footer>
+
+<script>
+let currentReport = null;
+let historyData = [];
+
+try {
+ historyData = JSON.parse(
+  localStorage.getItem("zora_history") || "[]"
+ );
+} catch {
+ historyData = [];
+}
+
+function updateStats() {
+ document.getElementById("total").textContent =
+  historyData.length;
+ document.getElementById("last").textContent =
+  historyData.length ? historyData[0].score + "/100" : "--";
+
+ const el = document.getElementById("history");
+
+ if (!historyData.length) {
+  el.innerHTML = '<p class="sub">No scan history available.</p>';
+  return;
+ }
+
+ el.innerHTML = historyData.map(item => `
+  <div class="history-item">
+   <div>
+    <strong>${escapeHTML(item.target)}</strong>
+    <small>${escapeHTML(item.date)}</small>
+   </div>
+   <strong>${item.score}/100</strong>
+  </div>
+ `).join("");
+}
+
+function escapeHTML(value) {
+ return String(value).replace(/[&<>"']/g, char => ({
+  "&":"&amp;","<":"&lt;",">":"&gt;",
+  '"':"&quot;","'":"&#39;"
+ }[char]));
+}
+
+async function startScan() {
+ const input = document.getElementById("target");
+ const button = document.getElementById("scanBtn");
+ const loading = document.getElementById("loading");
+ const target = input.value.trim();
+
+ if (!target) {
+  alert("Masukkan URL website terlebih dahulu.");
+  return;
+ }
+
+ let parsed;
+ try {
+  parsed = new URL(target);
+  if (parsed.protocol !== "https:") throw new Error();
+ } catch {
+  alert("Masukkan URL HTTPS yang valid.");
+  return;
+ }
+
+ button.disabled = true;
+ loading.style.display = "block";
+ document.getElementById("results").style.display = "none";
+
+ try {
+  const response = await fetch("/api/scan", {
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({url:parsed.href})
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+   throw new Error(data.error || "Scan failed.");
+  }
+
+  currentReport = data;
+  renderReport(data);
+
+  historyData.unshift({
+   target:data.target,
+   score:data.score,
+   date:new Date().toLocaleString("id-ID")
+  });
+
+  historyData = historyData.slice(0,20);
+  localStorage.setItem("zora_history",
+   JSON.stringify(historyData));
+
+  updateStats();
+
+ } catch(error) {
+  alert("SCAN ERROR: " + error.message);
+ } finally {
+  button.disabled = false;
+  loading.style.display = "none";
+ }
+}
+
+function renderReport(data) {
+ document.getElementById("results").style.display = "block";
+
+ document.getElementById("score").textContent = data.score;
+ document.getElementById("gauge").style.background =
+  `conic-gradient(var(--blue) ${data.score*3.6}deg,#28303d 0deg)`;
+
+ document.getElementById("grade").textContent =
+  data.score >= 85 ? "Good Configuration" :
+  data.score >= 60 ? "Needs Improvement" :
+  "Weak Configuration";
+
+ document.getElementById("domain").textContent = data.target;
+ document.getElementById("httpStatus").textContent =
+  "HTTP Status: " + data.status;
+ document.getElementById("scanDate").textContent =
+  new Date(data.scannedAt).toLocaleString("id-ID");
+
+ document.getElementById("checks").innerHTML =
+  data.checks.map(check => `
+   <div class="check">
+    <div>
+     <strong>${escapeHTML(check.name)}</strong>
+     <small>${escapeHTML(check.detail)}</small>
+    </div>
+    <span class="tag ${check.pass ? "pass":"fail"}">
+     ${check.pass ? "PASS":"MISSING"}
+    </span>
+   </div>
+  `).join("");
+
+ const cookies = data.cookies || [];
+
+ document.getElementById("cookies").innerHTML =
+  cookies.length ? cookies.map(cookie => `
+   <div class="check">
+    <div>
+     <strong>${escapeHTML(cookie.name)}</strong>
+     <small>
+      Secure: ${cookie.secure ? "Yes":"No"} ·
+      HttpOnly: ${cookie.httpOnly ? "Yes":"No"} ·
+      SameSite: ${cookie.sameSite ? "Yes":"No"}
+     </small>
+    </div>
+    <span class="tag ${cookie.secure && cookie.httpOnly &&
+      cookie.sameSite ? "pass":"fail"}">
+      ${cookie.secure && cookie.httpOnly &&
+      cookie.sameSite ? "PASS":"REVIEW"}
+    </span>
+   </div>
+  `).join("") :
+  '<p class="sub">No Set-Cookie headers detected.</p>';
+}
+
+function downloadReport() {
+ if (!currentReport) return;
+
+ const blob = new Blob(
+  [JSON.stringify(currentReport,null,2)],
+  {type:"application/json"}
+ );
+
+ const url = URL.createObjectURL(blob);
+ const a = document.createElement("a");
+ a.href = url;
+ a.download = "zora-security-report.json";
+ a.click();
+ URL.revokeObjectURL(url);
+}
+
+function clearHistory() {
+ if (!confirm("Clear all scan history?")) return;
+ historyData = [];
+ localStorage.removeItem("zora_history");
+ updateStats();
+}
+
+updateStats();
+</script>
+</body>
+</html>
