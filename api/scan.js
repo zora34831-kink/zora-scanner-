@@ -3,48 +3,51 @@ const https = require("https");
 const dns = require("dns").promises;
 const net = require("net");
 
-function isPublicIPv4(ip) {
+function publicIP(ip) {
   if (net.isIP(ip) !== 4) return false;
+
   const p = ip.split(".").map(Number);
+  const a = p[0], b = p[1], c = p[2];
 
   return !(
-    p[0] === 0 ||
-    p[0] === 10 ||
-    p[0] === 127 ||
-    p[0] >= 224 ||
-    (p[0] === 169 && p[1] === 254) ||
-    (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
-    (p[0] === 192 && p[1] === 168) ||
-    (p[0] === 100 && p[1] >= 64 && p[1] <= 127)
+    a === 0 || a === 10 || a === 127 ||
+    a >= 224 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113)
   );
 }
 
-async function validate(url) {
-  const u = new URL(url);
+async function validate(target) {
+  const url = new URL(target);
 
-  if (u.protocol !== "https:") {
-    throw new Error("Only HTTPS websites are supported.");
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== "443") ||
+    !url.hostname.includes(".") ||
+    url.hostname.endsWith(".local")
+  ) {
+    throw new Error("Invalid public HTTPS URL.");
   }
 
-  if (u.username || u.password || u.port && u.port !== "443") {
-    throw new Error("Invalid URL or port.");
-  }
-
-  if (net.isIP(u.hostname)) {
+  if (net.isIP(url.hostname)) {
     throw new Error("IP addresses are not accepted.");
   }
 
-  const records = await dns.lookup(u.hostname, { all: true });
+  const addresses = await dns.resolve4(url.hostname);
 
-  if (!records.length || records.some(x => !isPublicIPv4(x.address))) {
-    throw new Error("Website address is not allowed.");
+  if (!addresses.length || addresses.some(ip => !publicIP(ip))) {
+    throw new Error("Non-public address blocked.");
   }
 
-  const ipv4 = records.find(x => x.family === 4);
-
-  if (!ipv4) throw new Error("Public IPv4 address required.");
-
-  return { url: u, ip: ipv4.address };
+  return { url, ip: addresses[0] };
 }
 
 function requestPage(url, ip) {
@@ -55,77 +58,92 @@ function requestPage(url, ip) {
       port: 443,
       path: url.pathname + url.search,
       method: "GET",
-      lookup: (host, options, callback) =>
-        callback(null, ip, 4),
+      lookup: (hostname, options, callback) => {
+        callback(null, ip, 4);
+      },
       headers: {
         "User-Agent": "ZORA-Security-Scanner/1.0",
-        "Accept": "text/html,application/xhtml+xml"
+        "Accept": "text/html"
       },
       timeout: 10000,
       maxHeaderSize: 16384
-    }, res => {
+    }, response => {
       let size = 0;
 
-      res.on("data", chunk => {
+      response.on("data", chunk => {
         size += chunk.length;
-        if (size > 65536) req.destroy(
-          new Error("Response too large")
-        );
+
+        if (size > 65536) {
+          req.destroy(new Error("Response too large"));
+        }
       });
 
-      res.on("end", () => resolve({
-        status: res.statusCode,
-        headers: res.headers
-      }));
+      response.on("end", () => {
+        resolve({
+          status: response.statusCode,
+          headers: response.headers
+        });
+      });
     });
 
-    req.on("timeout", () => req.destroy(
-      new Error("Request timeout")
-    ));
+    req.on("timeout", () =>
+      req.destroy(new Error("Request timeout"))
+    );
 
     req.on("error", reject);
     req.end();
   });
 }
 
-async function scan(target, redirects = 0) {
+async function performScan(target, redirects = 0) {
   const { url, ip } = await validate(target);
   const result = await requestPage(url, ip);
 
-  const location = result.headers.location;
+  const redirectCodes = [301, 302, 303, 307, 308];
 
-  if ([301, 302, 303, 307, 308].includes(result.status)
-      && location) {
+  if (redirectCodes.includes(result.status) &&
+      result.headers.location) {
+
     if (redirects >= 4) {
       throw new Error("Too many redirects.");
     }
 
-    const next = new URL(location, url).toString();
-    return scan(next, redirects + 1);
+    const next = new URL(
+      result.headers.location,
+      url
+    ).toString();
+
+    return performScan(next, redirects + 1);
   }
 
-  return { url: url.origin, ...result };
+  return {
+    url: url.origin,
+    status: result.status,
+    headers: result.headers
+  };
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "POST") {
     return res.status(405).json({
+      success: false,
       error: "Method not allowed"
     });
   }
 
   try {
-    const target = req.body?.url;
+    const target = req.body && req.body.url;
 
     if (typeof target !== "string" || target.length > 2048) {
       return res.status(400).json({
-        error: "Invalid URL."
+        success: false,
+        error: "Invalid URL"
       });
     }
 
-    const data = await scan(target);
+    const data = await performScan(target);
     const h = data.headers;
 
     const checks = [
@@ -151,13 +169,17 @@ export default async function handler(req, res) {
       {
         name: "X-Frame-Options",
         pass: !!h["x-frame-options"] ||
-              /frame-ancestors/i.test(h["content-security-policy"] || ""),
-        detail: "Frame protection header check"
+          /frame-ancestors/i.test(
+            h["content-security-policy"] || ""
+          ),
+        detail: "Frame protection check"
       },
       {
         name: "X-Content-Type-Options",
-        pass: /nosniff/i.test(h["x-content-type-options"] || ""),
-        detail: "MIME sniffing protection check"
+        pass: /nosniff/i.test(
+          h["x-content-type-options"] || ""
+        ),
+        detail: "MIME protection check"
       },
       {
         name: "Referrer Policy",
@@ -167,33 +189,32 @@ export default async function handler(req, res) {
       {
         name: "Permissions Policy",
         pass: !!h["permissions-policy"],
-        detail: "Browser permissions policy check"
+        detail: "Permissions policy check"
       }
     ];
 
-    const cookies = h["set-cookie"] || [];
-    const cookieChecks = cookies.map(cookie => ({
+    const rawCookies = h["set-cookie"] || [];
+
+    const cookies = rawCookies.map(cookie => ({
       name: cookie.split(";")[0].split("=")[0],
       secure: /;\s*secure/i.test(cookie),
       httpOnly: /;\s*httponly/i.test(cookie),
       sameSite: /;\s*samesite=/i.test(cookie)
     }));
 
-    const cookieIssues = cookieChecks.reduce(
-      (total, c) =>
-        total + (!c.secure ? 1 : 0) +
-        (!c.httpOnly ? 1 : 0) +
-        (!c.sameSite ? 1 : 0), 0
+    const issues = cookies.reduce((total, c) =>
+      total +
+      (!c.secure ? 1 : 0) +
+      (!c.httpOnly ? 1 : 0) +
+      (!c.sameSite ? 1 : 0), 0
     );
 
     const passed = checks.filter(c => c.pass).length;
-    const score = Math.max(
-      0,
-      Math.round(
-        (passed / checks.length) * 100 -
-        Math.min(cookieIssues * 3, 15)
-      )
-    );
+
+    const score = Math.max(0, Math.round(
+      passed / checks.length * 100 -
+      Math.min(issues * 3, 15)
+    ));
 
     return res.status(200).json({
       success: true,
@@ -201,15 +222,17 @@ export default async function handler(req, res) {
       status: data.status,
       score,
       checks,
-      cookies: cookieChecks,
+      cookies,
       scannedAt: new Date().toISOString(),
-      disclaimer: "Passive checks only. This is not a complete security audit."
+      disclaimer: "Passive configuration checks only."
     });
 
   } catch (error) {
+    console.error("ZORA SCANNER:", error);
+
     return res.status(400).json({
       success: false,
-      error: error.message || "Scan failed."
+      error: error.message || "Scan failed"
     });
   }
-}
+};
