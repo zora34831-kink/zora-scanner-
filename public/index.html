@@ -341,7 +341,18 @@ async function startScan() {
    body:JSON.stringify({url:parsed.href})
   });
 
-  const data = await response.json();
+  const raw = await response.text();
+
+let data;
+
+try {
+  data = JSON.parse(raw);
+} catch {
+  throw new Error(
+    "Backend Vercel tidak mengirim JSON: " +
+    raw.slice(0, 200)
+  );
+}
 
   if (!response.ok || !data.success) {
    throw new Error(data.error || "Scan failed.");
