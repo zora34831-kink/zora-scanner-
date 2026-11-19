@@ -3,10 +3,10 @@ const https = require("https");
 const dns = require("dns").promises;
 const net = require("net");
 
-function isPublicIP(ip) {
+function isPublic(ip) {
   if (net.isIP(ip) !== 4) return false;
 
-  const [a, b, c] = ip.split(".").map(Number);
+  const [a, b] = ip.split(".").map(Number);
 
   return !(
     a === 0 || a === 10 || a === 127 || a >= 224 ||
@@ -14,84 +14,49 @@ function isPublicIP(ip) {
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 100 && b >= 64 && b <= 127) ||
-    (a === 192 && b === 0 && c === 0) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    (a === 198 && b === 51 && c === 100) ||
-    (a === 203 && b === 0 && c === 113)
+    (a === 192 && b === 0) ||
+    (a === 198 && (b === 18 || b === 19))
   );
 }
 
-async function validateURL(target) {
-  let url;
-
-  try {
-    url = new URL(target);
-  } catch {
-    throw new Error("Invalid website URL.");
-  }
+async function validate(target) {
+  const url = new URL(target);
 
   if (
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
-    (url.port && url.port !== "443") ||
+    url.port ||
     net.isIP(url.hostname) ||
-    !url.hostname.includes(".") ||
-    url.hostname.endsWith(".local")
+    !url.hostname.includes(".")
   ) {
-    throw new Error("Only public HTTPS websites are allowed.");
+    throw new Error("Invalid public HTTPS URL.");
   }
 
-  const addresses = await dns.resolve4(url.hostname);
+  const addresses = await dns.lookup(url.hostname, {
+    all: true,
+    verbatim: true
+  });
 
-  if (!addresses.length || addresses.some(ip => !isPublicIP(ip))) {
-    throw new Error("Website IP address is not allowed.");
+  if (
+    !addresses.length ||
+    addresses.some(x => !isPublic(x.address))
+  ) {
+    throw new Error("Non-public IP address blocked.");
   }
 
-  return {
-    url,
-    ip: addresses[0]
-  };
+  return url;
 }
 
-function requestWebsite(url, ip) {
+function request(url) {
   return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: url.hostname,
-      servername: url.hostname,
-      port: 443,
-      path: url.pathname + url.search,
-      method: "GET",
-      family: 4,
-      lookup: (hostname, options, callback) => {
-        if (typeof options === "function") {
-          callback = options;
-          options = {};
-        }
-
-        if (typeof callback !== "function") {
-          return;
-        }
-
-        if (!isPublicIP(ip)) {
-          return callback(new Error("Invalid IP address."));
-        }
-
-        if (options && options.all) {
-          callback(null, [{
-            address: ip,
-            family: 4
-          }]);
-        } else {
-          callback(null, ip, 4);
-        }
-      },
+    const req = https.get(url, {
+      timeout: 10000,
+      maxHeaderSize: 16384,
       headers: {
         "User-Agent": "ZORA-Security-Scanner/1.0",
-        "Accept": "text/html,application/xhtml+xml"
-      },
-      timeout: 10000,
-      maxHeaderSize: 16384
+        "Accept": "text/html"
+      }
     }, response => {
       let size = 0;
 
@@ -116,31 +81,25 @@ function requestWebsite(url, ip) {
     });
 
     req.on("error", reject);
-    req.end();
   });
 }
 
-async function performScan(target, redirects = 0) {
-  const { url, ip } = await validateURL(target);
-
-  const result = await requestWebsite(url, ip);
-
-  const redirectCodes = [301, 302, 303, 307, 308];
+async function scan(target, depth = 0) {
+  const url = await validate(target);
+  const result = await request(url);
 
   if (
-    redirectCodes.includes(result.status) &&
+    [301, 302, 303, 307, 308].includes(result.status) &&
     result.headers.location
   ) {
-    if (redirects >= 4) {
-      throw new Error("Maximum redirects exceeded.");
+    if (depth >= 4) {
+      throw new Error("Too many redirects.");
     }
 
-    const nextURL = new URL(
-      result.headers.location,
-      url
-    ).toString();
-
-    return performScan(nextURL, redirects + 1);
+    return scan(
+      new URL(result.headers.location, url).href,
+      depth + 1
+    );
   }
 
   return {
@@ -163,69 +122,35 @@ module.exports = async function handler(req, res) {
   try {
     const target = req.body?.url;
 
-    if (
-      typeof target !== "string" ||
-      target.length > 2048
-    ) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid URL."
-      });
+    if (typeof target !== "string" || target.length > 2048) {
+      throw new Error("Invalid URL.");
     }
 
-    const result = await performScan(target);
+    const result = await scan(target);
     const h = result.headers;
 
     const checks = [
-      {
-        name: "HTTPS Connection",
-        pass: true,
-        detail: "HTTPS connection established."
-      },
-      {
-        name: "Content Security Policy",
-        pass: !!h["content-security-policy"],
-        detail: h["content-security-policy"]
-          ? "CSP header detected."
-          : "CSP header missing."
-      },
-      {
-        name: "Strict Transport Security",
-        pass: !!h["strict-transport-security"],
-        detail: h["strict-transport-security"]
-          ? "HSTS header detected."
-          : "HSTS header missing."
-      },
-      {
-        name: "X-Frame-Options",
-        pass: !!h["x-frame-options"] ||
-          /frame-ancestors/i.test(
-            h["content-security-policy"] || ""
-          ),
-        detail: "Frame protection check."
-      },
-      {
-        name: "X-Content-Type-Options",
-        pass: /nosniff/i.test(
-          h["x-content-type-options"] || ""
-        ),
-        detail: "MIME protection check."
-      },
-      {
-        name: "Referrer Policy",
-        pass: !!h["referrer-policy"],
-        detail: "Referrer policy check."
-      },
-      {
-        name: "Permissions Policy",
-        pass: !!h["permissions-policy"],
-        detail: "Permissions policy check."
-      }
-    ];
+      ["HTTPS Connection", true],
+      ["Content Security Policy", !!h["content-security-policy"]],
+      ["Strict Transport Security", !!h["strict-transport-security"]],
+      [
+        "X-Frame-Options",
+        !!h["x-frame-options"] ||
+        /frame-ancestors/i.test(h["content-security-policy"] || "")
+      ],
+      [
+        "X-Content-Type-Options",
+        /nosniff/i.test(h["x-content-type-options"] || "")
+      ],
+      ["Referrer Policy", !!h["referrer-policy"]],
+      ["Permissions Policy", !!h["permissions-policy"]]
+    ].map(([name, pass]) => ({
+      name,
+      pass,
+      detail: pass ? "Protection detected." : "Header missing."
+    }));
 
-    const rawCookies = h["set-cookie"] || [];
-
-    const cookies = rawCookies.map(cookie => ({
+    const cookies = (h["set-cookie"] || []).map(cookie => ({
       name: cookie.split(";")[0].split("=")[0],
       secure: /;\s*secure/i.test(cookie),
       httpOnly: /;\s*httponly/i.test(cookie),
@@ -234,20 +159,17 @@ module.exports = async function handler(req, res) {
 
     const passed = checks.filter(c => c.pass).length;
 
-    const cookieIssues = cookies.reduce(
-      (total, cookie) =>
-        total +
-        (!cookie.secure ? 1 : 0) +
-        (!cookie.httpOnly ? 1 : 0) +
-        (!cookie.sameSite ? 1 : 0),
-      0
+    const issues = cookies.reduce((sum, c) =>
+      sum + (!c.secure ? 1 : 0) +
+      (!c.httpOnly ? 1 : 0) +
+      (!c.sameSite ? 1 : 0), 0
     );
 
     const score = Math.max(
       0,
       Math.round(
-        (passed / checks.length) * 100 -
-        Math.min(cookieIssues * 3, 15)
+        passed / checks.length * 100 -
+        Math.min(issues * 3, 15)
       )
     );
 
@@ -259,8 +181,7 @@ module.exports = async function handler(req, res) {
       checks,
       cookies,
       scannedAt: new Date().toISOString(),
-      disclaimer:
-        "Passive security configuration analysis only."
+      disclaimer: "Passive configuration analysis only."
     });
 
   } catch (error) {
@@ -268,7 +189,7 @@ module.exports = async function handler(req, res) {
 
     return res.status(400).json({
       success: false,
-      error: error.message || "Scanner failed."
+      error: error.message || "Scan failed."
     });
   }
 };
